@@ -30,7 +30,8 @@ namespace CosmosBenchmark
 
         public int Concurrency { get; set; }
         public int TotalOps { get; set; }
-
+        public int? MaxRequestsPerTcpConnection { get; set; }
+        public int? MaxTcpConnectionsPerEndpoint { get; set; }
         [JsonProperty]
         public static string MachineName { get; set; } = Environment.MachineName;
         [JsonProperty]
@@ -56,12 +57,15 @@ namespace CosmosBenchmark
         public double Top80PercentAverageRps { get; set; }
         public double Top90PercentAverageRps { get; set; }
         public double Top95PercentAverageRps { get; set; }
+        public double Top99PercentAverageRps { get; set; }
 
         public double? Top50PercentLatencyInMs { get; set; }
         public double? Top75PercentLatencyInMs { get; set; }
         public double? Top90PercentLatencyInMs { get; set; }
         public double? Top95PercentLatencyInMs { get; set; }
+        public double? Top98PercentLatencyInMs { get; set; }
         public double? Top99PercentLatencyInMs { get; set; }
+        public double? MaxLatencyInMs { get; set; }
 
         public double AverageRps { get; set; }
 

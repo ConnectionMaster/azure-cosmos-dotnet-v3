@@ -9,6 +9,7 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos.CosmosElements;
+    using Microsoft.Azure.Cosmos.Diagnostics;
     using Microsoft.Azure.Cosmos.Pagination;
     using Microsoft.Azure.Cosmos.Query.Core;
     using Microsoft.Azure.Cosmos.Query.Core.Monads;
@@ -27,12 +28,13 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
 
         public ReadFeedIteratorCore(
             IDocumentContainer documentContainer,
-            QueryRequestOptions queryRequestOptions,
             string continuationToken,
-            int pageSize,
+            ReadFeedPaginationOptions readFeedPaginationOptions,
+            QueryRequestOptions queryRequestOptions,
             CancellationToken cancellationToken)
         {
             this.queryRequestOptions = queryRequestOptions;
+            readFeedPaginationOptions ??= ReadFeedPaginationOptions.Default;
 
             if (!string.IsNullOrEmpty(continuationToken))
             {
@@ -127,11 +129,11 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
                 FeedRange feedRange;
                 if ((this.queryRequestOptions != null) && this.queryRequestOptions.PartitionKey.HasValue)
                 {
-                    feedRange = new FeedRangePartitionKey(queryRequestOptions.PartitionKey.Value);
+                    feedRange = new FeedRangePartitionKey(this.queryRequestOptions.PartitionKey.Value);
                 }
-                else if ((this.queryRequestOptions != null) && (queryRequestOptions.FeedRange != null))
+                else if ((this.queryRequestOptions != null) && (this.queryRequestOptions.FeedRange != null))
                 {
-                    feedRange = queryRequestOptions.FeedRange;
+                    feedRange = this.queryRequestOptions.FeedRange;
                 }
                 else
                 {
@@ -154,9 +156,8 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
                 this.monadicEnumerator = TryCatch<CrossPartitionReadFeedAsyncEnumerator>.FromResult(
                     CrossPartitionReadFeedAsyncEnumerator.Create(
                         documentContainer,
-                        queryRequestOptions,
                         new CrossFeedRangeState<ReadFeedState>(monadicReadFeedState.Result.FeedRangeStates),
-                        pageSize,
+                        readFeedPaginationOptions,
                         cancellationToken));
             }
 
@@ -184,8 +185,6 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
                 throw new ArgumentNullException(nameof(trace));
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-
             if (!this.hasMoreResults)
             {
                 throw new InvalidOperationException("Should not be calling FeedIterator that does not have any more results");
@@ -195,16 +194,22 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
             {
                 this.hasMoreResults = false;
 
-                CosmosException cosmosException = ExceptionToCosmosException.CreateFromException(this.monadicEnumerator.Exception);
+                if (!ExceptionToCosmosException.TryCreateFromException(this.monadicEnumerator.Exception, trace, out CosmosException cosmosException))
+                {
+                    throw this.monadicEnumerator.Exception;
+                }
+
                 return new ResponseMessage(
                     statusCode: System.Net.HttpStatusCode.BadRequest,
                     requestMessage: null,
                     headers: cosmosException.Headers,
                     cosmosException: cosmosException,
-                    diagnostics: cosmosException.DiagnosticsContext);
+                    trace: trace);
             }
 
             CrossPartitionReadFeedAsyncEnumerator enumerator = this.monadicEnumerator.Result;
+            enumerator.SetCancellationToken(cancellationToken);
+
             TryCatch<CrossFeedRangePage<Pagination.ReadFeedPage, ReadFeedState>> monadicPage;
             try
             {
@@ -215,14 +220,18 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
 
                 monadicPage = enumerator.Current;
             }
-            catch (Exception ex)
+            catch (OperationCanceledException ex) when (!(ex is CosmosOperationCanceledException))
             {
-                monadicPage = TryCatch<CrossFeedRangePage<Pagination.ReadFeedPage, ReadFeedState>>.FromException(ex);
+                throw new CosmosOperationCanceledException(ex, trace);
             }
 
             if (monadicPage.Failed)
             {
-                CosmosException cosmosException = ExceptionToCosmosException.CreateFromException(monadicPage.Exception);
+                if (!ExceptionToCosmosException.TryCreateFromException(monadicPage.Exception, trace, out CosmosException cosmosException))
+                {
+                    throw monadicPage.Exception;
+                }
+
                 if (!IsRetriableException(cosmosException))
                 {
                     this.hasMoreResults = false;
@@ -233,7 +242,7 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
                     requestMessage: null,
                     headers: cosmosException.Headers,
                     cosmosException: cosmosException,
-                    diagnostics: cosmosException.DiagnosticsContext);
+                    trace: trace);
             }
 
             CrossFeedRangePage<Pagination.ReadFeedPage, ReadFeedState> crossFeedRangePage = monadicPage.Result;
@@ -276,7 +285,7 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
                 {
                     outerFeedRange = new FeedRangePartitionKey(this.queryRequestOptions.PartitionKey.Value);
                 }
-                else if ((this.queryRequestOptions != null) && (queryRequestOptions.FeedRange != null))
+                else if ((this.queryRequestOptions != null) && (this.queryRequestOptions.FeedRange != null))
                 {
                     outerFeedRange = (FeedRangeInternal)this.queryRequestOptions.FeedRange;
                 }
@@ -298,17 +307,23 @@ namespace Microsoft.Azure.Cosmos.ReadFeed
             }
 
             Pagination.ReadFeedPage page = crossFeedRangePage.Page;
+            Headers headers = new Headers()
+            {
+                RequestCharge = page.RequestCharge,
+                ActivityId = page.ActivityId,
+                ContinuationToken = continuationToken,
+            };
+            foreach (KeyValuePair<string, string> kvp in page.AdditionalHeaders)
+            {
+                headers[kvp.Key] = kvp.Value;
+            }
+
             return new ResponseMessage(
                 statusCode: System.Net.HttpStatusCode.OK,
                 requestMessage: default,
-                headers: new Headers()
-                {
-                    RequestCharge = page.RequestCharge,
-                    ActivityId = page.ActivityId,
-                    ContinuationToken = continuationToken,
-                },
+                headers: headers,
                 cosmosException: default,
-                diagnostics: page.Diagnostics)
+                trace: trace)
             {
                 Content = page.Content,
             };

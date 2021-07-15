@@ -17,14 +17,11 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
     internal sealed class CrossPartitionReadFeedAsyncEnumerator : IAsyncEnumerator<TryCatch<CrossFeedRangePage<ReadFeedPage, ReadFeedState>>>
     {
         private readonly CrossPartitionRangePageAsyncEnumerator<ReadFeedPage, ReadFeedState> crossPartitionEnumerator;
-        private CancellationToken cancellationToken;
 
         private CrossPartitionReadFeedAsyncEnumerator(
-            CrossPartitionRangePageAsyncEnumerator<ReadFeedPage, ReadFeedState> crossPartitionEnumerator,
-            CancellationToken cancellationToken)
+            CrossPartitionRangePageAsyncEnumerator<ReadFeedPage, ReadFeedState> crossPartitionEnumerator)
         {
             this.crossPartitionEnumerator = crossPartitionEnumerator ?? throw new ArgumentNullException(nameof(crossPartitionEnumerator));
-            this.cancellationToken = cancellationToken;
         }
 
         public TryCatch<CrossFeedRangePage<ReadFeedPage, ReadFeedState>> Current { get; set; }
@@ -40,8 +37,6 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
             {
                 throw new ArgumentNullException(nameof(trace));
             }
-
-            this.cancellationToken.ThrowIfCancellationRequested();
 
             using (ITrace moveNextAsyncTrace = trace.StartChild(name: nameof(MoveNextAsync), component: TraceComponent.ReadFeed, level: TraceLevel.Info))
             {
@@ -66,11 +61,15 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
 
         public ValueTask DisposeAsync() => this.crossPartitionEnumerator.DisposeAsync();
 
+        public void SetCancellationToken(CancellationToken cancellationToken)
+        {
+            this.crossPartitionEnumerator.SetCancellationToken(cancellationToken);
+        }
+
         public static CrossPartitionReadFeedAsyncEnumerator Create(
             IDocumentContainer documentContainer,
-            QueryRequestOptions queryRequestOptions,
             CrossFeedRangeState<ReadFeedState> crossFeedRangeState,
-            int pageSize,
+            ReadFeedPaginationOptions readFeedPaginationOptions,
             CancellationToken cancellationToken)
         {
             if (documentContainer == null)
@@ -83,14 +82,12 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
                 throw new ArgumentNullException(nameof(crossFeedRangeState));
             }
 
-            RntbdConstants.RntdbEnumerationDirection rntdbEnumerationDirection = RntbdConstants.RntdbEnumerationDirection.Forward;
-            if ((queryRequestOptions?.Properties != null) && queryRequestOptions.Properties.TryGetValue(HttpConstants.HttpHeaders.EnumerationDirection, out object direction))
-            {
-                rntdbEnumerationDirection = (byte)direction == (byte)RntbdConstants.RntdbEnumerationDirection.Reverse ? RntbdConstants.RntdbEnumerationDirection.Reverse : RntbdConstants.RntdbEnumerationDirection.Forward;
-            }
+            readFeedPaginationOptions ??= ReadFeedPaginationOptions.Default;
+
+            ReadFeedPaginationOptions.PaginationDirection paginationDirection = readFeedPaginationOptions.Direction.GetValueOrDefault(ReadFeedPaginationOptions.PaginationDirection.Forward);
 
             IComparer<PartitionRangePageAsyncEnumerator<ReadFeedPage, ReadFeedState>> comparer;
-            if (rntdbEnumerationDirection == RntbdConstants.RntdbEnumerationDirection.Forward)
+            if (paginationDirection == ReadFeedPaginationOptions.PaginationDirection.Forward)
             {
                 comparer = PartitionRangePageAsyncEnumeratorComparerForward.Singleton;
             }
@@ -103,8 +100,7 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
                 documentContainer,
                 CrossPartitionReadFeedAsyncEnumerator.MakeCreateFunction(
                     documentContainer,
-                    queryRequestOptions,
-                    pageSize,
+                    readFeedPaginationOptions,
                     cancellationToken),
                 comparer: comparer,
                 maxConcurrency: default,
@@ -112,23 +108,19 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
                 crossFeedRangeState);
 
             CrossPartitionReadFeedAsyncEnumerator enumerator = new CrossPartitionReadFeedAsyncEnumerator(
-                crossPartitionEnumerator,
-                cancellationToken);
+                crossPartitionEnumerator);
 
             return enumerator;
         }
 
         private static CreatePartitionRangePageAsyncEnumerator<ReadFeedPage, ReadFeedState> MakeCreateFunction(
             IReadFeedDataSource readFeedDataSource,
-            QueryRequestOptions queryRequestOptions,
-            int pageSize,
-            CancellationToken cancellationToken) => (FeedRangeInternal range, ReadFeedState state) => new ReadFeedPartitionRangeEnumerator(
+            ReadFeedPaginationOptions readFeedPaginationOptions,
+            CancellationToken cancellationToken) => (FeedRangeState<ReadFeedState> feedRangeState) => new ReadFeedPartitionRangeEnumerator(
                 readFeedDataSource,
-                range,
-                queryRequestOptions,
-                pageSize,
-                cancellationToken,
-                state);
+                feedRangeState,
+                readFeedPaginationOptions,
+                cancellationToken);
 
         private sealed class PartitionRangePageAsyncEnumeratorComparerForward : IComparer<PartitionRangePageAsyncEnumerator<ReadFeedPage, ReadFeedState>>
         {
@@ -144,21 +136,21 @@ namespace Microsoft.Azure.Cosmos.ReadFeed.Pagination
                 }
 
                 // Order does not matter for logical partition keys, since they are vacously split proof.
-                if (partitionRangePageEnumerator1.Range is FeedRangePartitionKey)
+                if (partitionRangePageEnumerator1.FeedRangeState.FeedRange is FeedRangePartitionKey)
                 {
                     return -1;
                 }
 
                 // Order does not matter for logical partition keys, since they are vacously split proof.
-                if (partitionRangePageEnumerator2.Range is FeedRangePartitionKey)
+                if (partitionRangePageEnumerator2.FeedRangeState.FeedRange is FeedRangePartitionKey)
                 {
                     return -1;
                 }
 
                 // Either both don't have results or both do.
                 return string.CompareOrdinal(
-                    ((FeedRangeEpk)partitionRangePageEnumerator1.Range).Range.Min,
-                    ((FeedRangeEpk)partitionRangePageEnumerator2.Range).Range.Min);
+                    ((FeedRangeEpk)partitionRangePageEnumerator1.FeedRangeState.FeedRange).Range.Min,
+                    ((FeedRangeEpk)partitionRangePageEnumerator2.FeedRangeState.FeedRange).Range.Min);
             }
         }
 

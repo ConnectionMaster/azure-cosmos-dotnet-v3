@@ -5,10 +5,8 @@
 namespace CosmosCTL
 {
     using System;
-    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Diagnostics;
-    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using App.Metrics;
@@ -19,12 +17,6 @@ namespace CosmosCTL
 
     internal class ReadWriteQueryScenario : ICTLScenario
     {
-        private static readonly string DefaultPartitionKey = "pk";
-        private static readonly string DefaultPartitionKeyPath = $"/{DefaultPartitionKey}";
-        private static readonly int DefaultDocumentFieldCount = 5;
-        private static readonly int DefaultDataFieldSize = 20;
-        private static readonly string DataFieldValue = Convert.ToBase64String(Guid.NewGuid().ToByteArray()).Substring(0, DefaultDataFieldSize);
-
         private readonly Random random = new Random();
 
         private ReadWriteQueryPercentage readWriteQueryPercentage;
@@ -53,20 +45,28 @@ namespace CosmosCTL
                 logger.LogInformation("Created {0} collections for execution", this.initializationResult.CreatedContainers.Count);
             }
 
-            logger.LogInformation("Pre-populating {0} documents", config.Operations);
-            this.createdDocuments = await PopulateDocumentsAsync(config, logger, this.initializationResult.Containers);
+            logger.LogInformation("Pre-populating {0} documents", config.PreCreatedDocuments);
+            this.createdDocuments = await Utils.PopulateDocumentsAsync(config, logger, this.initializationResult.Containers);
         }
 
         public async Task RunAsync(
-            CTLConfig config, 
+            CTLConfig config,
             CosmosClient cosmosClient,
-            ILogger logger, 
+            ILogger logger,
             IMetrics metrics,
+            string loggingContextIdentifier,
             CancellationToken cancellationToken)
         {
             try
             {
-                await this.ExecuteOperationsAsync(config, logger, metrics, this.initializationResult, this.readWriteQueryPercentage, cancellationToken);
+                await this.ExecuteOperationsAsync(
+                    config,
+                    logger,
+                    metrics,
+                    loggingContextIdentifier,
+                    this.initializationResult,
+                    this.readWriteQueryPercentage,
+                    cancellationToken);
             }
             catch (Exception unhandledException)
             {
@@ -92,17 +92,18 @@ namespace CosmosCTL
             CTLConfig config,
             ILogger logger,
             IMetrics metrics,
+            string loggingContextIdentifier,
             InitializationResult initializationResult,
             ReadWriteQueryPercentage readWriteQueryPercentage,
             CancellationToken cancellationToken)
         {
             logger.LogInformation("Initializing counters and metrics.");
-            CounterOptions readSuccessMeter = new CounterOptions { Name = "#Read Successful Operations", Context = nameof(WorkloadType.ReadWriteQuery) };
-            CounterOptions readFailureMeter = new CounterOptions { Name = "#Read Unsuccessful Operations", Context = nameof(WorkloadType.ReadWriteQuery) };
-            CounterOptions writeSuccessMeter = new CounterOptions { Name = "#Write Successful Operations", Context = nameof(WorkloadType.ReadWriteQuery) };
-            CounterOptions writeFailureMeter = new CounterOptions { Name = "#Write Unsuccessful Operations", Context = nameof(WorkloadType.ReadWriteQuery) };
-            CounterOptions querySuccessMeter = new CounterOptions { Name = "#Query Successful Operations", Context = nameof(WorkloadType.ReadWriteQuery) };
-            CounterOptions queryFailureMeter = new CounterOptions { Name = "#Query Unsuccessful Operations", Context = nameof(WorkloadType.ReadWriteQuery) };
+            CounterOptions readSuccessMeter = new CounterOptions { Name = "#Read Successful Operations", Context = loggingContextIdentifier };
+            CounterOptions readFailureMeter = new CounterOptions { Name = "#Read Unsuccessful Operations", Context = loggingContextIdentifier };
+            CounterOptions writeSuccessMeter = new CounterOptions { Name = "#Write Successful Operations", Context = loggingContextIdentifier };
+            CounterOptions writeFailureMeter = new CounterOptions { Name = "#Write Unsuccessful Operations", Context = loggingContextIdentifier };
+            CounterOptions querySuccessMeter = new CounterOptions { Name = "#Query Successful Operations", Context = loggingContextIdentifier };
+            CounterOptions queryFailureMeter = new CounterOptions { Name = "#Query Unsuccessful Operations", Context = loggingContextIdentifier };
 
             TimerOptions readLatencyTimer = new TimerOptions
             {
@@ -110,7 +111,7 @@ namespace CosmosCTL
                 MeasurementUnit = Unit.Requests,
                 DurationUnit = TimeUnit.Milliseconds,
                 RateUnit = TimeUnit.Seconds,
-                Context = nameof(WorkloadType.ReadWriteQuery),
+                Context = loggingContextIdentifier,
                 Reservoir = () => new App.Metrics.ReservoirSampling.Uniform.DefaultAlgorithmRReservoir()
             };
 
@@ -120,7 +121,7 @@ namespace CosmosCTL
                 MeasurementUnit = Unit.Requests,
                 DurationUnit = TimeUnit.Milliseconds,
                 RateUnit = TimeUnit.Seconds,
-                Context = nameof(WorkloadType.ReadWriteQuery),
+                Context = loggingContextIdentifier,
                 Reservoir = () => new App.Metrics.ReservoirSampling.Uniform.DefaultAlgorithmRReservoir()
             };
 
@@ -130,7 +131,7 @@ namespace CosmosCTL
                 MeasurementUnit = Unit.Requests,
                 DurationUnit = TimeUnit.Milliseconds,
                 RateUnit = TimeUnit.Seconds,
-                Context = nameof(WorkloadType.ReadWriteQuery),
+                Context = loggingContextIdentifier,
                 Reservoir = () => new App.Metrics.ReservoirSampling.Uniform.DefaultAlgorithmRReservoir()
             };
 
@@ -138,23 +139,28 @@ namespace CosmosCTL
             Stopwatch stopwatch = Stopwatch.StartNew();
             int writeRange = readWriteQueryPercentage.ReadPercentage + readWriteQueryPercentage.WritePercentage;
             long diagnosticsThresholdDuration = (long)config.DiagnosticsThresholdDurationAsTimespan.TotalMilliseconds;
-            List<Task> operations = new List<Task>((int)config.Operations);
+            List<Task> operations = new List<Task>();
             for (long i = 0; ShouldContinue(stopwatch, i, config); i++)
             {
+                await concurrencyControlSemaphore.WaitAsync(cancellationToken);
                 long index = (long)i % 100;
                 if (index < readWriteQueryPercentage.ReadPercentage)
                 {
                     operations.Add(CTLOperationHandler<ItemResponse<Dictionary<string, string>>>.PerformOperationAsync(
-                        semaphoreSlim: concurrencyControlSemaphore,
                         diagnosticsLoggingThreshold: diagnosticsThresholdDuration,
                         createTimerContext: () => metrics.Measure.Timer.Time(readLatencyTimer),
                         resultProducer: new SingleExecutionResultProducer<ItemResponse<Dictionary<string, string>>>(() => this.CreateReadOperation(
                             operation: i,
+                            partitionKeyAttributeName: config.CollectionPartitionKey,
                             containers: initializationResult.Containers,
                             createdDocumentsPerContainer: this.createdDocuments)),
-                        onSuccess: () => metrics.Measure.Counter.Increment(readSuccessMeter),
+                        onSuccess: () => {
+                            concurrencyControlSemaphore.Release();
+                            metrics.Measure.Counter.Increment(readSuccessMeter);
+                        },
                         onFailure: (Exception ex) =>
                         {
+                            concurrencyControlSemaphore.Release();
                             metrics.Measure.Counter.Increment(readFailureMeter);
                             logger.LogError(ex, "Failure during read operation");
                         },
@@ -164,16 +170,21 @@ namespace CosmosCTL
                 else if (index < writeRange)
                 {
                     operations.Add(CTLOperationHandler<ItemResponse<Dictionary<string, string>>>.PerformOperationAsync(
-                        semaphoreSlim: concurrencyControlSemaphore,
                         diagnosticsLoggingThreshold: diagnosticsThresholdDuration,
                         createTimerContext: () => metrics.Measure.Timer.Time(writeLatencyTimer),
                         resultProducer: new SingleExecutionResultProducer<ItemResponse<Dictionary<string, string>>>(() => this.CreateWriteOperation(
                             operation: i,
+                            partitionKeyAttributeName: config.CollectionPartitionKey,
                             containers: initializationResult.Containers,
                             isContentResponseOnWriteEnabled: config.IsContentResponseOnWriteEnabled)),
-                        onSuccess: () => metrics.Measure.Counter.Increment(writeSuccessMeter),
+                        onSuccess: () =>
+                        {
+                            concurrencyControlSemaphore.Release();
+                            metrics.Measure.Counter.Increment(writeSuccessMeter);
+                        },
                         onFailure: (Exception ex) =>
                         {
+                            concurrencyControlSemaphore.Release();
                             metrics.Measure.Counter.Increment(writeFailureMeter);
                             logger.LogError(ex, "Failure during write operation");
                         },
@@ -184,15 +195,19 @@ namespace CosmosCTL
                 else
                 {
                     operations.Add(CTLOperationHandler<FeedResponse<Dictionary<string, string>>>.PerformOperationAsync(
-                        semaphoreSlim: concurrencyControlSemaphore,
                         diagnosticsLoggingThreshold: diagnosticsThresholdDuration,
                         createTimerContext: () => metrics.Measure.Timer.Time(queryLatencyTimer),
                         resultProducer: new IteratorResultProducer<Dictionary<string, string>>(this.CreateQueryOperation(
                             operation: i,
                             containers: initializationResult.Containers)),
-                        onSuccess: () => metrics.Measure.Counter.Increment(querySuccessMeter),
+                        onSuccess: () =>
+                        {
+                            concurrencyControlSemaphore.Release();
+                            metrics.Measure.Counter.Increment(querySuccessMeter);
+                        },
                         onFailure: (Exception ex) =>
                         {
+                            concurrencyControlSemaphore.Release();
                             metrics.Measure.Counter.Increment(queryFailureMeter);
                             logger.LogError(ex, "Failure during query operation");
                         },
@@ -204,27 +219,29 @@ namespace CosmosCTL
             await Task.WhenAll(operations);
             stopwatch.Stop();
             logger.LogInformation("[{0}] operations performed in [{1}] seconds.",
-                config.Operations, stopwatch.Elapsed.TotalSeconds);
+                operations.Count, stopwatch.Elapsed.TotalSeconds);
         }
 
         private Task<ItemResponse<Dictionary<string, string>>> CreateReadOperation(
             long operation,
+            string partitionKeyAttributeName,
             IReadOnlyList<Container> containers,
             IReadOnlyDictionary<string, IReadOnlyList<Dictionary<string, string>>> createdDocumentsPerContainer)
         {
             Container container = containers[(int)operation % containers.Count];
             IReadOnlyList<Dictionary<string, string>> documents = createdDocumentsPerContainer[container.Id];
             Dictionary<string, string> document = documents[this.random.Next(documents.Count)];
-            return container.ReadItemAsync<Dictionary<string, string>>(document["id"], new PartitionKey(document[DefaultPartitionKey]));
+            return container.ReadItemAsync<Dictionary<string, string>>(document["id"], new PartitionKey(document[partitionKeyAttributeName]));
         }
 
         private Task<ItemResponse<Dictionary<string, string>>> CreateWriteOperation(
             long operation,
+            string partitionKeyAttributeName,
             IReadOnlyList<Container> containers,
             bool isContentResponseOnWriteEnabled)
         {
             Container container = containers[(int)operation % containers.Count];
-            Dictionary<string, string> document = GenerateDocument();
+            Dictionary<string, string> document = Utils.GenerateDocument(partitionKeyAttributeName);
             ItemRequestOptions itemRequestOptions = new ItemRequestOptions
             {
                 EnableContentResponseOnWrite = isContentResponseOnWriteEnabled
@@ -240,7 +257,7 @@ namespace CosmosCTL
             Container container = containers[(int)operation % containers.Count];
             QueryRequestOptions queryRequestOptions = new QueryRequestOptions() { MaxItemCount = 10 };
             return container.GetItemQueryIterator<Dictionary<string, string>>(
-                queryText: "Select top 100 * from c order by c._ts", 
+                queryText: "Select top 100 * from c order by c._ts",
                 requestOptions: queryRequestOptions);
         }
 
@@ -268,79 +285,6 @@ namespace CosmosCTL
             }
 
             return iterationCount < maxNumberOfOperations;
-        }
-
-        private static async Task<IReadOnlyDictionary<string, IReadOnlyList<Dictionary<string, string>>>> PopulateDocumentsAsync(
-            CTLConfig config,
-            ILogger logger,
-            IEnumerable<Container> containers)
-        {
-            Dictionary<string, IReadOnlyList<Dictionary<string, string>>> createdDocuments = new Dictionary<string, IReadOnlyList<Dictionary<string, string>>>();
-            foreach (Container container in containers)
-            {
-                long successes = 0;
-                long failures = 0;
-                ConcurrentBag<Dictionary<string, string>> createdDocumentsInContainer = new ConcurrentBag<Dictionary<string, string>>();
-                IEnumerable<Dictionary<string, string>> documentsToCreate = GenerateDocuments(config.Operations);
-                await Utils.ForEachAsync(documentsToCreate, (Dictionary<string, string> doc) 
-                    => container.CreateItemAsync(doc).ContinueWith(task =>
-                    {
-                        if (task.IsCompletedSuccessfully)
-                        {
-                            createdDocumentsInContainer.Add(doc);
-                            Interlocked.Increment(ref successes);
-                        }
-                        else
-                        {
-                            AggregateException innerExceptions = task.Exception.Flatten();
-                            if (innerExceptions.InnerExceptions.FirstOrDefault(innerEx => innerEx is CosmosException) is CosmosException cosmosException)
-                            {
-                                logger.LogError(cosmosException, "Failure pre-populating container {0}", container.Id);
-                            }
-
-                            Interlocked.Increment(ref failures);
-                        }
-                    }), 100);
-
-                if (successes > 0)
-                {
-                    logger.LogInformation("Completed pre-populating {0} documents in container {1}.", successes, container.Id);
-                }
-
-                if (failures > 0)
-                {
-                    logger.LogWarning("Failed pre-populating {0} documents in container {1}.", failures, container.Id);
-                }
-
-                createdDocuments.Add(container.Id, createdDocumentsInContainer.ToList());
-            }
-
-            return createdDocuments;
-        }
-
-        private static IEnumerable<Dictionary<string, string>> GenerateDocuments(long documentsToCreate)
-        {
-            List<Dictionary<string, string>> createdDocuments = new List<Dictionary<string, string>>((int)documentsToCreate);
-            for (long i = 0; i < documentsToCreate; i++)
-            {
-                createdDocuments.Add(GenerateDocument());
-            }
-
-            return createdDocuments;
-        }
-
-        private static Dictionary<string, string> GenerateDocument()
-        {
-            Dictionary<string, string> document = new Dictionary<string, string>();
-            string newGuid = Guid.NewGuid().ToString();
-            document["id"] = newGuid;
-            document[DefaultPartitionKey] = newGuid;
-            for (int j = 0; j < DefaultDocumentFieldCount; j++)
-            {
-                document["dataField" + j] = DataFieldValue;
-            }
-
-            return document;
         }
 
         /// <summary>
@@ -377,7 +321,7 @@ namespace CosmosCTL
 
             for (int i = 1; i <= collectionCount; i++)
             {
-                string containerName = $"{config.Collection}_{i}";
+                string containerName = collectionCount == 1 ? config.Collection : $"{config.Collection}_{i}";
                 Container container;
                 try
                 {
@@ -385,7 +329,7 @@ namespace CosmosCTL
                 }
                 catch (CosmosException exception) when (exception.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    container = await database.CreateContainerAsync(containerName, ReadWriteQueryScenario.DefaultPartitionKeyPath);
+                    container = await database.CreateContainerAsync(containerName, $"/{config.CollectionPartitionKey}");
                     createdContainers.Add(containerName);
                 }
 

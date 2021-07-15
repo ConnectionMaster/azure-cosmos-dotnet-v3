@@ -7,6 +7,7 @@ namespace Microsoft.Azure.Cosmos
     using System;
     using System.Threading;
     using System.Threading.Tasks;
+    using Microsoft.Azure.Cosmos.Tracing;
 
     /// <summary>
     /// Abstraction which allows defining of custom message handlers.
@@ -46,9 +47,22 @@ namespace Microsoft.Azure.Cosmos
                 throw new ArgumentNullException(nameof(this.InnerHandler));
             }
 
-            using (request.DiagnosticsContext.CreateRequestHandlerScopeScope(this.InnerHandler))
+            // Keep a reference to the current trace.
+            ITrace trace = request.Trace;
+            ITrace childTrace = request.Trace.StartChild(
+                this.InnerHandler.FullHandlerName,
+                TraceComponent.RequestHandler,
+                TraceLevel.Info);
+            try
             {
+                request.Trace = childTrace;
                 return await this.InnerHandler.SendAsync(request, cancellationToken);
+            }
+            finally
+            {
+                childTrace.Dispose();
+                // Set the trace back to the parent trace.
+                request.Trace = trace;
             }
         }
     }

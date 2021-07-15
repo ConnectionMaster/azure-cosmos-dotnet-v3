@@ -32,7 +32,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
@@ -50,6 +50,33 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
         }
 
         [TestMethod]
+        public async Task ResponseHeadersAsync()
+        {
+            int seed = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
+            uint numberOfDocuments = 1;
+            QueryOracleUtil util = new QueryOracle2(seed);
+            IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
+
+            await this.CreateIngestQueryDeleteAsync(
+                ConnectionModes.Direct | ConnectionModes.Gateway,
+                CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
+                inputDocuments,
+                ImplementationAsync);
+
+            static async Task ImplementationAsync(Container container, IReadOnlyList<CosmosObject> documents)
+            {
+                FeedIterator<JToken> itemQuery = container.GetItemQueryIterator<JToken>(
+                    queryText: "SELECT * FROM c",
+                    requestOptions: new QueryRequestOptions());
+                while (itemQuery.HasMoreResults)
+                {
+                    FeedResponse<JToken> page = await itemQuery.ReadNextAsync();
+                    Assert.IsTrue(page.Headers.AllKeys().Length > 1);
+                }
+            }
+        }
+
+        [TestMethod]
         public async Task TestBasicCrossPartitionQueryAsync()
         {
             int seed = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
@@ -58,7 +85,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
@@ -103,7 +130,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
@@ -130,12 +157,12 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
 
             // Test draining typed iterator
             using (FeedIterator<JObject> feedIterator = container.GetItemQueryIterator<JObject>(
-                    queryDefinition: null,
-                    continuationToken: null,
-                    requestOptions: new QueryRequestOptions
-                    {
-                        MaxItemCount = 1000,
-                    }))
+                queryDefinition: null,
+                continuationToken: null,
+                requestOptions: new QueryRequestOptions
+                {
+                    MaxItemCount = 1000,
+                }))
             {
                 weakReferences.Add(new WeakReference(feedIterator, true));
                 while (feedIterator.HasMoreResults)
@@ -150,12 +177,12 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
 
             // Test draining stream iterator
             using (FeedIterator feedIterator = container.GetItemQueryStreamIterator(
-                    queryDefinition: null,
-                    continuationToken: null,
-                    requestOptions: new QueryRequestOptions
-                    {
-                        MaxItemCount = 1000,
-                    }))
+                queryDefinition: null,
+                continuationToken: null,
+                requestOptions: new QueryRequestOptions
+                {
+                    MaxItemCount = 1000,
+                }))
             {
                 weakReferences.Add(new WeakReference(feedIterator, true));
                 while (feedIterator.HasMoreResults)
@@ -169,12 +196,12 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
 
             // Test single page typed iterator
             using (FeedIterator<JObject> feedIterator = container.GetItemQueryIterator<JObject>(
-                    queryText: "SELECT * FROM c",
-                    continuationToken: null,
-                    requestOptions: new QueryRequestOptions
-                    {
-                        MaxItemCount = 10,
-                    }))
+                queryText: "SELECT * FROM c",
+                continuationToken: null,
+                requestOptions: new QueryRequestOptions
+                {
+                    MaxItemCount = 10,
+                }))
             {
                 weakReferences.Add(new WeakReference(feedIterator, true));
                 FeedResponse<JObject> response = await feedIterator.ReadNextAsync();
@@ -186,12 +213,12 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
 
             // Test single page stream iterator
             using (FeedIterator feedIterator = container.GetItemQueryStreamIterator(
-                    queryText: "SELECT * FROM c",
-                    continuationToken: null,
-                    requestOptions: new QueryRequestOptions
-                    {
-                        MaxItemCount = 10,
-                    }))
+                queryText: "SELECT * FROM c",
+                continuationToken: null,
+                requestOptions: new QueryRequestOptions
+                {
+                    MaxItemCount = 10,
+                }))
             {
                 weakReferences.Add(new WeakReference(feedIterator, true));
                 using (ResponseMessage response = await feedIterator.ReadNextAsync())
@@ -200,7 +227,74 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
                 }
             }
 
+            // Dummy Operation
+            using (FeedIterator feedIterator = container.GetItemQueryStreamIterator(
+                queryText: "SELECT * FROM c",
+                continuationToken: null,
+                requestOptions: new QueryRequestOptions
+                {
+                    MaxItemCount = 10,
+                }))
+            {
+                using (ResponseMessage response = await feedIterator.ReadNextAsync())
+                {
+                    Assert.IsNotNull(response.Content);
+                }
+            }
+
             return weakReferences;
+        }
+
+        [TestMethod]
+        public async Task StoreResponseStatisticsMemoryLeak()
+        {
+            int seed = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
+            uint numberOfDocuments = 100;
+            QueryOracleUtil util = new QueryOracle2(seed);
+            IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
+
+            await this.CreateIngestQueryDeleteAsync(
+                ConnectionModes.Direct | ConnectionModes.Gateway,
+                CollectionTypes.MultiPartition,
+                inputDocuments,
+                ImplementationAsync);
+
+            static async Task ImplementationAsync(Container container, IReadOnlyList<CosmosObject> documents)
+            {
+                using (FeedIterator feedIterator = container.GetItemQueryStreamIterator(
+                    queryText: "SELECT * FROM c",
+                    continuationToken: null,
+                    requestOptions: new QueryRequestOptions
+                    {
+                        MaxItemCount = 10,
+                    }))
+                {
+                    WeakReference weakReference = await CreateWeakReferenceToResponseContent(feedIterator);
+
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect();
+                    await Task.Delay(500 /*ms*/);
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect();
+
+                    Assert.IsFalse(weakReference.IsAlive);
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static async Task<WeakReference> CreateWeakReferenceToResponseContent(
+            FeedIterator feedIterator)
+        {
+            WeakReference weakResponseContent;
+            using (ResponseMessage response = await feedIterator.ReadNextAsync())
+            {
+                Assert.IsNotNull(response.Content);
+                weakResponseContent = new WeakReference(response.Content, true);
+            }
+
+            return weakResponseContent;
         }
 
         [TestMethod]
@@ -212,7 +306,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> documents = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.MultiPartition,
                 documents,
                 ImplementationAsync);
@@ -273,7 +367,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
@@ -315,7 +409,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
@@ -356,17 +450,31 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             QueryOracleUtil util = new QueryOracle2(seed);
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
+            ConnectionModes connectionModes = ConnectionModes.Direct;
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                connectionModes,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
 
-            static async Task ImplementationAsync(Container container, IReadOnlyList<CosmosObject> documents)
+            connectionModes = ConnectionModes.Gateway;
+            await this.CreateIngestQueryDeleteAsync(
+                connectionModes,
+                CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
+                inputDocuments,
+                ImplementationAsync);
+
+            async Task ImplementationAsync(Container container, IReadOnlyList<CosmosObject> documents)
             {
                 ContainerInternal containerCore = (ContainerInlineCore)container;
 
-                foreach (bool isGatewayQueryPlan in new bool[] { true, false })
+                List<bool> isGatewayQueryPlanOptions = new List<bool> { true };
+                if (connectionModes == ConnectionModes.Direct)
+                {
+                    isGatewayQueryPlanOptions.Append(false);
+                }
+
+                foreach (bool isGatewayQueryPlan in isGatewayQueryPlanOptions)
                 {
                     MockCosmosQueryClient cosmosQueryClientCore = new MockCosmosQueryClient(
                         containerCore.ClientContext,
@@ -461,7 +569,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
         public async Task TestTryExecuteQuery()
         {
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.SinglePartition,
                 QueryTestsBase.NoDocuments,
                 this.TestTryExecuteQueryHelper);
@@ -557,7 +665,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
         public async Task TestMalformedPipelinedContinuationToken()
         {
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 NoDocuments,
                 this.TestMalformedPipelinedContinuationTokenHelper);
@@ -641,8 +749,17 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
                 @"{""id"":""documentId12"",""prop"":1,""shortArray"":[{""a"":7}]}",
             };
 
+            ConnectionModes connectionModes = ConnectionModes.Direct;
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                connectionModes,
+                CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
+                inputDocs,
+                ImplementationAsync,
+                "/key");
+
+            connectionModes = ConnectionModes.Gateway;
+            await this.CreateIngestQueryDeleteAsync(
+                connectionModes,
                 CollectionTypes.SinglePartition | CollectionTypes.MultiPartition,
                 inputDocs,
                 ImplementationAsync,
@@ -656,7 +773,13 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
                     {
                         ContainerInternal containerCore = (ContainerInlineCore)container;
 
-                        foreach (bool isGatewayQueryPlan in new bool[] { true, false })
+                        List<bool> isGatewayQueryPlanOptions = new List<bool>{ true };
+                        if (connectionModes == ConnectionModes.Direct)
+                        {
+                            isGatewayQueryPlanOptions.Append(false);
+                        }
+
+                        foreach (bool isGatewayQueryPlan in isGatewayQueryPlanOptions)
                         {
                             foreach (Cosmos.PartitionKey? partitionKey in new Cosmos.PartitionKey?[] { new Cosmos.PartitionKey(5), default })
                             {
@@ -886,7 +1009,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);
@@ -935,7 +1058,7 @@ namespace Microsoft.Azure.Cosmos.EmulatorTests.Query
             IEnumerable<string> inputDocuments = util.GetDocuments(numberOfDocuments);
 
             await this.CreateIngestQueryDeleteAsync(
-                ConnectionModes.Direct,
+                ConnectionModes.Direct | ConnectionModes.Gateway,
                 CollectionTypes.MultiPartition,
                 inputDocuments,
                 ImplementationAsync);

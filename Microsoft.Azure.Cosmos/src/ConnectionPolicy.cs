@@ -39,7 +39,7 @@ namespace Microsoft.Azure.Cosmos
             this.ConnectionMode = ConnectionMode.Gateway;
             this.MaxConcurrentFanoutRequests = defaultMaxConcurrentFanoutRequests;
             this.MediaReadMode = MediaReadMode.Buffered;
-            this.UserAgentContainer = new UserAgentContainer();
+            this.UserAgentContainer = new UserAgentContainer(clientId: 0);
             this.preferredLocations = new ObservableCollection<string>();
             this.EnableEndpointDiscovery = true;
             this.MaxConnectionLimit = defaultMaxConcurrentConnectionLimit;
@@ -275,6 +275,12 @@ namespace Microsoft.Azure.Cosmos
         /// <value>Default value is true indicating endpoint discovery is enabled.</value>
         /// </remarks>
         public bool EnableEndpointDiscovery
+        {
+            get;
+            set;
+        }
+
+        public bool EnablePartitionLevelFailover
         {
             get;
             set;

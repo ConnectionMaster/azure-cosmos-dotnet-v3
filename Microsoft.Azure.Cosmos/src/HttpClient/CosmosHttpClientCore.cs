@@ -12,8 +12,9 @@ namespace Microsoft.Azure.Cosmos
     using System.Net.Http.Headers;
     using System.Threading;
     using System.Threading.Tasks;
-    using Microsoft.Azure.Cosmos.Diagnostics;
     using Microsoft.Azure.Cosmos.Resource.CosmosExceptions;
+    using Microsoft.Azure.Cosmos.Tracing;
+    using Microsoft.Azure.Cosmos.Tracing.TraceData;
     using Microsoft.Azure.Documents;
     using Microsoft.Azure.Documents.Collections;
 
@@ -168,7 +169,7 @@ namespace Microsoft.Azure.Cosmos
             INameValueCollection additionalHeaders,
             ResourceType resourceType,
             HttpTimeoutPolicy timeoutPolicy,
-            CosmosDiagnosticsContext diagnosticsContext,
+            IClientSideRequestStatistics clientSideRequestStatistics,
             CancellationToken cancellationToken)
         {
             if (uri == null)
@@ -199,7 +200,7 @@ namespace Microsoft.Azure.Cosmos
                 CreateRequestMessage,
                 resourceType,
                 timeoutPolicy,
-                diagnosticsContext,
+                clientSideRequestStatistics,
                 cancellationToken);
         }
 
@@ -207,7 +208,7 @@ namespace Microsoft.Azure.Cosmos
             Func<ValueTask<HttpRequestMessage>> createRequestMessageAsync,
             ResourceType resourceType,
             HttpTimeoutPolicy timeoutPolicy,
-            CosmosDiagnosticsContext diagnosticsContext,
+            IClientSideRequestStatistics clientSideRequestStatistics,
             CancellationToken cancellationToken)
         {
             if (createRequestMessageAsync == null)
@@ -218,16 +219,16 @@ namespace Microsoft.Azure.Cosmos
             return this.SendHttpHelperAsync(
                 createRequestMessageAsync,
                 resourceType,
-                diagnosticsContext ?? new CosmosDiagnosticsContextCore(),
                 timeoutPolicy,
+                clientSideRequestStatistics,
                 cancellationToken);
         }
 
         private async Task<HttpResponseMessage> SendHttpHelperAsync(
             Func<ValueTask<HttpRequestMessage>> createRequestMessageAsync,
             ResourceType resourceType,
-            CosmosDiagnosticsContext diagnosticsContext,
             HttpTimeoutPolicy timeoutPolicy,
+            IClientSideRequestStatistics clientSideRequestStatistics,
             CancellationToken cancellationToken)
         {
             DateTime startDateTimeUtc = DateTime.UtcNow;
@@ -243,32 +244,27 @@ namespace Microsoft.Azure.Cosmos
                     // If the default cancellation token is passed then use the timeout policy
                     using CancellationTokenSource cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     cancellationTokenSource.CancelAfter(requestTimeout);
-
+                    DateTime requestStartTime = DateTime.UtcNow;
                     try
                     {
-                        using (diagnosticsContext.CreateScope(nameof(CosmosHttpClientCore.SendHttpHelperAsync) + ":" + timeoutPolicy.TimeoutPolicyName))
+                        HttpResponseMessage responseMessage = await this.ExecuteHttpHelperAsync(
+                            requestMessage,
+                            resourceType,
+                            cancellationTokenSource.Token);
+
+                        if (clientSideRequestStatistics is ClientSideRequestStatisticsTraceDatum datum)
                         {
-                            return await this.ExecuteHttpHelperAsync(
-                                requestMessage,
-                                resourceType,
-                                cancellationTokenSource.Token);
+                            datum.RecordHttpResponse(requestMessage, responseMessage, resourceType, requestStartTime);
                         }
+
+                        return responseMessage;
                     }
                     catch (Exception e)
                     {
-                        // Log the error message
-                        diagnosticsContext.AddDiagnosticsInternal(
-                              new PointOperationStatistics(
-                                  activityId: Trace.CorrelationManager.ActivityId.ToString(),
-                                  statusCode: HttpStatusCode.ServiceUnavailable,
-                                  subStatusCode: SubStatusCodes.Unknown,
-                                  responseTimeUtc: DateTime.UtcNow,
-                                  requestCharge: 0,
-                                  errorMessage: e.ToString(),
-                                  method: requestMessage.Method,
-                                  requestUri: requestMessage.RequestUri.OriginalString,
-                                  requestSessionToken: null,
-                                  responseSessionToken: null));
+                        if (clientSideRequestStatistics is ClientSideRequestStatisticsTraceDatum datum)
+                        {
+                            datum.RecordHttpException(requestMessage, e, resourceType, requestStartTime);
+                        }
 
                         bool isOutOfRetries = (DateTime.UtcNow - startDateTimeUtc) > timeoutPolicy.MaximumRetryTimeLimit || // Maximum of time for all retries
                             !timeoutEnumerator.MoveNext(); // No more retries are configured
@@ -286,13 +282,11 @@ namespace Microsoft.Azure.Cosmos
                                 // the request timed out and was not user canceled operation.
                                 if (isOutOfRetries || !timeoutPolicy.IsSafeToRetry(requestMessage.Method))
                                 {
-                                    // throw timeout if the cancellationToken is not canceled (i.e. httpClient timed out)
+                                    // throw current exception (caught in transport handler)
                                     string message =
-                                        $"GatewayStoreClient Request Timeout. Start Time UTC:{startDateTimeUtc}; Total Duration:{(DateTime.UtcNow - startDateTimeUtc).TotalMilliseconds} Ms; Request Timeout {requestTimeout.TotalMilliseconds} Ms; Http Client Timeout:{this.httpClient.Timeout.TotalMilliseconds} Ms; Activity id: {Trace.CorrelationManager.ActivityId};";
-                                    throw CosmosExceptionFactory.CreateRequestTimeoutException(
-                                        message,
-                                        innerException: operationCanceledException,
-                                        diagnosticsContext: diagnosticsContext);
+                                            $"GatewayStoreClient Request Timeout. Start Time UTC:{startDateTimeUtc}; Total Duration:{(DateTime.UtcNow - startDateTimeUtc).TotalMilliseconds} Ms; Request Timeout {requestTimeout.TotalMilliseconds} Ms; Http Client Timeout:{this.httpClient.Timeout.TotalMilliseconds} Ms; Activity id: {System.Diagnostics.Trace.CorrelationManager.ActivityId};";
+                                    e.Data.Add("Message", message);
+                                    throw;
                                 }
 
                                 break;
@@ -314,14 +308,12 @@ namespace Microsoft.Azure.Cosmos
                                 throw;
                         }
                     }
+                    
                 }
 
                 if (delayForNextRequest != TimeSpan.Zero)
                 {
-                    using (diagnosticsContext.CreateScope($"HttpRetryDelay; Delay:{delayForNextRequest} seconds; Current request timeout {requestTimeout}; TimeoutPolicy: {timeoutPolicy.TimeoutPolicyName}"))
-                    {
-                        await Task.Delay(delayForNextRequest);
-                    }
+                    await Task.Delay(delayForNextRequest);
                 }
             }
         }
@@ -334,7 +326,7 @@ namespace Microsoft.Azure.Cosmos
             DateTime sendTimeUtc = DateTime.UtcNow;
             Guid localGuid = Guid.NewGuid(); // For correlating HttpRequest and HttpResponse Traces
 
-            Guid requestedActivityId = Trace.CorrelationManager.ActivityId;
+            Guid requestedActivityId = System.Diagnostics.Trace.CorrelationManager.ActivityId;
             this.eventSource.Request(
                 requestedActivityId,
                 localGuid,

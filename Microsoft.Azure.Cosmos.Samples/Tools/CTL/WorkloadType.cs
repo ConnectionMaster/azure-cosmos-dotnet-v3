@@ -4,12 +4,10 @@
 
 namespace CosmosCTL
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Text;
-
     public enum WorkloadType
     {
-        ReadWriteQuery
+        ReadWriteQuery,
+        ChangeFeedProcessor,
+        ChangeFeedPull
     }
 }

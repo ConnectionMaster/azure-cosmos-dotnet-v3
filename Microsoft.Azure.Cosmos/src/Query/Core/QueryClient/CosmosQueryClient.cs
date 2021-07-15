@@ -11,7 +11,7 @@ namespace Microsoft.Azure.Cosmos.Query.Core.QueryClient
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos.Diagnostics;
     using Microsoft.Azure.Cosmos.Query.Core.Monads;
-    using Microsoft.Azure.Cosmos.Query.Core.Pipeline;
+    using Microsoft.Azure.Cosmos.Query.Core.Pipeline.Pagination;
     using Microsoft.Azure.Cosmos.Query.Core.QueryPlan;
     using Microsoft.Azure.Cosmos.Tracing;
 
@@ -44,6 +44,7 @@ namespace Microsoft.Azure.Cosmos.Query.Core.QueryClient
             bool isContinuationExpected,
             bool allowNonValueAggregateQuery,
             bool hasLogicalPartitionKey,
+            bool allowDCount,
             CancellationToken cancellationToken);
 
         public abstract Task<TryCatch<QueryPage>> ExecuteItemQueryAsync(
@@ -53,7 +54,6 @@ namespace Microsoft.Azure.Cosmos.Query.Core.QueryClient
             Guid clientQueryCorrelationId,
             FeedRange feedRange,
             QueryRequestOptions requestOptions,
-            Action<QueryPageDiagnostics> queryPageDiagnostics,
             SqlQuerySpec sqlQuerySpec,
             string continuationToken,
             bool isContinuationExpected,
@@ -68,7 +68,6 @@ namespace Microsoft.Azure.Cosmos.Query.Core.QueryClient
             SqlQuerySpec sqlQuerySpec,
             PartitionKey? partitionKey,
             string supportedQueryFeatures,
-            CosmosDiagnosticsContext diagnosticsContext,
             ITrace trace,
             CancellationToken cancellationToken);
 

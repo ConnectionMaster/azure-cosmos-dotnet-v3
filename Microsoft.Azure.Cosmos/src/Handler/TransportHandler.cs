@@ -9,7 +9,9 @@ namespace Microsoft.Azure.Cosmos.Handlers
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using Microsoft.Azure.Cosmos.Resource.CosmosExceptions;
     using Microsoft.Azure.Cosmos.Tracing;
+    using Microsoft.Azure.Cosmos.Tracing.TraceData;
     using Microsoft.Azure.Documents;
 
     //TODO: write unit test for this handler
@@ -43,6 +45,26 @@ namespace Microsoft.Azure.Cosmos.Handlers
                 Debug.Assert(System.Diagnostics.Trace.CorrelationManager.ActivityId != Guid.Empty, "Trace activity id is missing");
                 return ce.ToCosmosResponseMessage(request);
             }
+            catch (OperationCanceledException ex)
+            {
+                // Catch Operation Cancelled Exception and convert to Timeout 408 if the user did not cancel it.
+                // Throw the exception if the user cancelled.
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                Debug.Assert(System.Diagnostics.Trace.CorrelationManager.ActivityId != Guid.Empty, "Trace activity id is missing");
+                CosmosException cosmosException = CosmosExceptionFactory.CreateRequestTimeoutException(
+                                                            message: ex.Data?["Message"].ToString(),
+                                                            headers: new Headers()
+                                                            {
+                                                                ActivityId = System.Diagnostics.Trace.CorrelationManager.ActivityId.ToString()
+                                                            },
+                                                            innerException: ex,
+                                                            trace: request.Trace);
+                return cosmosException.ToCosmosResponseMessage(request);
+            }
             catch (AggregateException ex)
             {
                 Debug.Assert(System.Diagnostics.Trace.CorrelationManager.ActivityId != Guid.Empty, "Trace activity id is missing");
@@ -69,6 +91,8 @@ namespace Microsoft.Azure.Cosmos.Handlers
             }
 
             DocumentServiceRequest serviceRequest = request.ToDocumentServiceRequest();
+            ClientSideRequestStatisticsTraceDatum clientSideRequestStatisticsTraceDatum = new ClientSideRequestStatisticsTraceDatum(DateTime.UtcNow);
+            serviceRequest.RequestContext.ClientRequestStatistics = clientSideRequestStatisticsTraceDatum;
 
             //TODO: extrace auth into a separate handler
             string authorization = await ((ICosmosAuthorizationTokenProvider)this.client.DocumentClient).GetUserAuthorizationTokenAsync(
@@ -77,7 +101,7 @@ namespace Microsoft.Azure.Cosmos.Handlers
                 request.Method.ToString(),
                 serviceRequest.Headers,
                 AuthorizationTokenType.PrimaryMasterKey,
-                request.DiagnosticsContext);
+                request.Trace);
 
             serviceRequest.Headers[HttpConstants.HttpHeaders.Authorization] = authorization;
 
@@ -87,17 +111,16 @@ namespace Microsoft.Azure.Cosmos.Handlers
                 TraceComponent.Transport,
                 Tracing.TraceLevel.Info))
             {
-                using (request.DiagnosticsContext.CreateScope(storeProxy.GetType().FullName))
-                {
-                    DocumentServiceResponse response = request.OperationType == OperationType.Upsert
+                request.Trace = processMessageAsyncTrace;
+                processMessageAsyncTrace.AddDatum("Client Side Request Stats", clientSideRequestStatisticsTraceDatum);
+
+                DocumentServiceResponse response = request.OperationType == OperationType.Upsert
                         ? await this.ProcessUpsertAsync(storeProxy, serviceRequest, cancellationToken)
                         : await storeProxy.ProcessMessageAsync(serviceRequest, cancellationToken);
 
-                    return response.ToCosmosResponseMessage(
-                        request, 
-                        serviceRequest.RequestContext.RequestChargeTracker,
-                        processMessageAsyncTrace);
-                }
+                return response.ToCosmosResponseMessage(
+                    request,
+                    serviceRequest.RequestContext.RequestChargeTracker);
             }
         }
 

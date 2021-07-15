@@ -7,19 +7,13 @@ namespace Microsoft.Azure.Cosmos
     using System;
     using System.Diagnostics;
     using System.Globalization;
-    using Microsoft.Azure.Cosmos.Json;
     using Microsoft.Azure.Cosmos.Serializer;
     using Microsoft.Azure.Documents;
 
     /// <summary>
     /// The Cosmos Change Feed request options
     /// </summary>
-#if PREVIEW
-    public
-#else
-    internal
-#endif
-    sealed class ChangeFeedRequestOptions : RequestOptions
+    public sealed class ChangeFeedRequestOptions : RequestOptions
     {
         private int? pageSizeHint;
 
@@ -45,20 +39,6 @@ namespace Microsoft.Azure.Cosmos
         }
 
         /// <summary>
-        /// Gets or sets whether or not to emit the old continuation token.
-        /// </summary>
-        /// <remarks>
-        /// This is useful for when you want to upgrade your SDK, but can not upgrade all nodes atomically. 
-        /// In that scenario perform a "two phase deployment".
-        /// In the first phase deploy with EmitOldContinuationToken = true; this will ensure that none of the old SDKs encounter a new continuation token.
-        /// Once the first phase is complete and all nodes are able to read the new continuation token, then
-        /// in the second phase redeploy with EmitOldContinuationToken = false.
-        /// This will succesfully migrate all nodes to emit the new continuation token format.
-        /// Eventually all your tokens from the previous version will be migrated. 
-        /// </remarks>
-        public bool EmitOldContinuationToken { get; set; }
-
-        /// <summary>
         /// Fill the CosmosRequestMessage headers with the set properties
         /// </summary>
         /// <param name="request">The <see cref="RequestMessage"/></param>
@@ -67,17 +47,6 @@ namespace Microsoft.Azure.Cosmos
             Debug.Assert(request != null);
 
             base.PopulateRequestOptions(request);
-
-            if (this.PageSizeHint.HasValue)
-            {
-                request.Headers.Add(
-                    HttpConstants.HttpHeaders.PageSize,
-                    this.PageSizeHint.Value.ToString(CultureInfo.InvariantCulture));
-            }
-
-            request.Headers.Add(
-                HttpConstants.HttpHeaders.A_IM,
-                HttpConstants.A_IMHeaderValues.IncrementalFeed);
         }
 
         /// <summary>

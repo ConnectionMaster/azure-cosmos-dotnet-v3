@@ -11,6 +11,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
     using Microsoft.Azure.Cosmos.ChangeFeed.Bootstrapping;
     using Microsoft.Azure.Cosmos.ChangeFeed.LeaseManagement;
     using Microsoft.Azure.Cosmos.Routing;
+    using Microsoft.Azure.Cosmos.Tracing;
     using Microsoft.Azure.Documents;
     using Microsoft.VisualStudio.TestTools.UnitTesting;
     using Moq;
@@ -36,7 +37,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             };
 
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -49,7 +50,8 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.Is<Documents.Routing.Range<string>>(r => r.Min == range.Min && r.Max == range.Max),
-                It.Is<bool>(b => b == true)))
+                It.IsAny<ITrace>(),
+                true))
                 .ReturnsAsync(resultingRanges);
 
             Mock<DocumentServiceLeaseManager> leaseManager = new Mock<DocumentServiceLeaseManager>();
@@ -98,7 +100,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             };
 
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -112,6 +114,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.Is<Documents.Routing.Range<string>>(r => r.Min == range.Min && r.Max == range.Max),
+                It.IsAny<ITrace>(),
                 It.Is<bool>(b => b == true)))
                 .ReturnsAsync(resultingRanges);
 
@@ -165,7 +168,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             };
 
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -177,6 +180,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.Is<Documents.Routing.Range<string>>(r => r.Min == range.Min && r.Max == range.Max),
+                It.IsAny<ITrace>(),
                 It.Is<bool>(b => b == true)))
                 .ReturnsAsync(resultingRanges);
 
@@ -222,7 +226,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             };
 
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -234,7 +238,8 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.Is<Documents.Routing.Range<string>>(r => r.Min == range.Min && r.Max == range.Max),
-                It.Is<bool>(b => b == true)))
+                It.IsAny<ITrace>(),
+                true))
                 .ReturnsAsync(resultingRanges);
 
             Mock<DocumentServiceLeaseManager> leaseManager = new Mock<DocumentServiceLeaseManager>();
@@ -269,7 +274,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
         public async Task CreateMissingLeases_NoLeases()
         {
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -282,7 +287,8 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.IsAny<Documents.Routing.Range<string>>(),
-                It.Is<bool>(b => b == true)))
+                It.IsAny<ITrace>(),
+                false))
                 .ReturnsAsync(resultingRanges);
 
             Mock<DocumentServiceLeaseManager> leaseManager = new Mock<DocumentServiceLeaseManager>();
@@ -313,7 +319,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
         public async Task CreateMissingLeases_SomePKRangeLeases()
         {
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -326,7 +332,8 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.IsAny<Documents.Routing.Range<string>>(),
-                It.Is<bool>(b => b == true)))
+                It.IsAny<ITrace>(),
+                false))
                 .ReturnsAsync(resultingRanges);
 
             Mock<DocumentServiceLeaseManager> leaseManager = new Mock<DocumentServiceLeaseManager>();
@@ -363,7 +370,7 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
         public async Task CreateMissingLeases_SomePKRangeAndEPKLeases()
         {
             Mock<Routing.PartitionKeyRangeCache> pkRangeCache = new Mock<Routing.PartitionKeyRangeCache>(
-                Mock.Of<Documents.IAuthorizationTokenProvider>(),
+                Mock.Of<ICosmosAuthorizationTokenProvider>(),
                 Mock.Of<Documents.IStoreModel>(),
                 Mock.Of<Common.CollectionCache>());
 
@@ -377,7 +384,8 @@ namespace Microsoft.Azure.Cosmos.ChangeFeed.Tests
             pkRangeCache.Setup(p => p.TryGetOverlappingRangesAsync(
                 It.IsAny<string>(),
                 It.IsAny<Documents.Routing.Range<string>>(),
-                It.Is<bool>(b => b == true)))
+                It.IsAny<ITrace>(),
+                false))
                 .ReturnsAsync(resultingRanges);
 
             Mock<DocumentServiceLeaseManager> leaseManager = new Mock<DocumentServiceLeaseManager>();

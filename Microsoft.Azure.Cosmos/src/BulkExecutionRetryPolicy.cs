@@ -9,6 +9,7 @@ namespace Microsoft.Azure.Cosmos
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos.Routing;
+    using Microsoft.Azure.Cosmos.Tracing;
     using Microsoft.Azure.Documents;
 
     /// <summary>
@@ -18,6 +19,7 @@ namespace Microsoft.Azure.Cosmos
     /// <see cref="ItemBatchOperationContext"/>
     internal sealed class BulkExecutionRetryPolicy : IDocumentClientRetryPolicy
     {
+        private const int SubstatusCodeBatchResponseSizeExceeded = 3402;
         private const int MaxRetryOn410 = 10;
         private readonly IDocumentClientRetryPolicy nextRetryPolicy;
         private readonly OperationType operationType;
@@ -85,8 +87,6 @@ namespace Microsoft.Azure.Cosmos
             this.nextRetryPolicy.OnBeforeSendRequest(request);
         }
 
-        private bool IsReadRequest => this.operationType == OperationType.Read;
-
         private async Task<ShouldRetryResult> ShouldRetryInternalAsync(
             HttpStatusCode? statusCode,
             SubStatusCodes? subStatusCode,
@@ -105,9 +105,16 @@ namespace Microsoft.Azure.Cosmos
                     || subStatusCode == SubStatusCodes.CompletingSplit
                     || subStatusCode == SubStatusCodes.CompletingPartitionMigration)
                 {
-                    PartitionKeyRangeCache partitionKeyRangeCache = await this.container.ClientContext.DocumentClient.GetPartitionKeyRangeCacheAsync();
-                    string containerRid = await this.container.GetCachedRIDAsync(forceRefresh: false, cancellationToken: cancellationToken);
-                    await partitionKeyRangeCache.TryGetOverlappingRangesAsync(containerRid, FeedRangeEpk.FullRange.Range, forceRefresh: true);
+                    PartitionKeyRangeCache partitionKeyRangeCache = await this.container.ClientContext.DocumentClient.GetPartitionKeyRangeCacheAsync(NoOpTrace.Singleton);
+                    string containerRid = await this.container.GetCachedRIDAsync(
+                        forceRefresh: false, 
+                        NoOpTrace.Singleton, 
+                        cancellationToken: cancellationToken);
+                    await partitionKeyRangeCache.TryGetOverlappingRangesAsync(
+                        containerRid,
+                        FeedRangeEpk.FullRange.Range,
+                        NoOpTrace.Singleton, 
+                        forceRefresh: true);
                     return ShouldRetryResult.RetryAfter(TimeSpan.Zero);
                 }
 
@@ -118,9 +125,9 @@ namespace Microsoft.Azure.Cosmos
             }
 
             // Batch API can return 413 which means the response is bigger than 4Mb.
-            // Operations that exceed the 4Mb limit are returned as 413, while the operations within the 4Mb limit will be 200
-            if (this.IsReadRequest
-                && statusCode == HttpStatusCode.RequestEntityTooLarge)
+            // Operations that exceed the 4Mb limit are returned as 413/3402, while the operations within the 4Mb limit will be 200
+            if (statusCode == HttpStatusCode.RequestEntityTooLarge 
+                && (int)subStatusCode == SubstatusCodeBatchResponseSizeExceeded)
             {
                 return ShouldRetryResult.RetryAfter(TimeSpan.Zero);
             }

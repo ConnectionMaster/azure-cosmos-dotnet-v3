@@ -8,6 +8,7 @@ namespace Microsoft.Azure.Cosmos.Query.Core.Pipeline
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Azure.Cosmos.Query.Core.Monads;
+    using Microsoft.Azure.Cosmos.Query.Core.Pipeline.Pagination;
     using Microsoft.Azure.Cosmos.Tracing;
 
     internal sealed class LazyQueryPipelineStage : IQueryPipelineStage
@@ -44,8 +45,6 @@ namespace Microsoft.Azure.Cosmos.Query.Core.Pipeline
 
         public async ValueTask<bool> MoveNextAsync(ITrace trace)
         {
-            this.cancellationToken.ThrowIfCancellationRequested();
-
             if (trace == null)
             {
                 throw new ArgumentNullException(nameof(trace));
@@ -59,6 +58,7 @@ namespace Microsoft.Azure.Cosmos.Query.Core.Pipeline
             }
 
             IQueryPipelineStage stage = tryCreateStage.Result;
+            stage.SetCancellationToken(this.cancellationToken);
             if (!await stage.MoveNextAsync(trace))
             {
                 this.Current = default;

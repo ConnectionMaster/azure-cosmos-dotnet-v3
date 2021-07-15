@@ -9,6 +9,7 @@ namespace Microsoft.Azure.Cosmos
     using System.Threading.Tasks;
     using global::Azure.Core;
     using Microsoft.Azure.Cosmos.Core.Trace;
+    using Microsoft.Azure.Cosmos.Tracing;
     using Microsoft.Azure.Documents;
     using Microsoft.Azure.Documents.Collections;
 
@@ -20,13 +21,11 @@ namespace Microsoft.Azure.Cosmos
         public AuthorizationTokenProviderTokenCredential(
             TokenCredential tokenCredential,
             Uri accountEndpoint,
-            TimeSpan requestTimeout,
             TimeSpan? backgroundTokenCredentialRefreshInterval)
         {
             this.tokenCredentialCache = new TokenCredentialCache(
                 tokenCredential: tokenCredential,
                 accountEndpoint: accountEndpoint,
-                requestTimeout: requestTimeout,
                 backgroundTokenCredentialRefreshInterval: backgroundTokenCredentialRefreshInterval);
         }
 
@@ -37,9 +36,12 @@ namespace Microsoft.Azure.Cosmos
             INameValueCollection headers,
             AuthorizationTokenType tokenType)
         {
-            string token = AuthorizationTokenProviderTokenCredential.GenerateAadAuthorizationSignature(
-                    await this.tokenCredentialCache.GetTokenAsync(EmptyCosmosDiagnosticsContext.Singleton));
-            return (token, default);
+            using (Trace trace = Trace.GetRootTrace(nameof(GetUserAuthorizationTokenAsync), TraceComponent.Authorization, TraceLevel.Info))
+            {
+                string token = AuthorizationTokenProviderTokenCredential.GenerateAadAuthorizationSignature(
+                    await this.tokenCredentialCache.GetTokenAsync(trace));
+                return (token, default);
+            }
         }
 
         public override async ValueTask<string> GetUserAuthorizationTokenAsync(
@@ -48,10 +50,10 @@ namespace Microsoft.Azure.Cosmos
             string requestVerb,
             INameValueCollection headers,
             AuthorizationTokenType tokenType,
-            CosmosDiagnosticsContext diagnosticsContext)
+            ITrace trace)
         {
             return AuthorizationTokenProviderTokenCredential.GenerateAadAuthorizationSignature(
-                    await this.tokenCredentialCache.GetTokenAsync(diagnosticsContext));
+                    await this.tokenCredentialCache.GetTokenAsync(trace));
         }
 
         public override async ValueTask AddAuthorizationHeaderAsync(
@@ -60,10 +62,13 @@ namespace Microsoft.Azure.Cosmos
             string verb,
             AuthorizationTokenType tokenType)
         {
-            string token = AuthorizationTokenProviderTokenCredential.GenerateAadAuthorizationSignature(
-                    await this.tokenCredentialCache.GetTokenAsync(EmptyCosmosDiagnosticsContext.Singleton));
+            using (Trace trace = Trace.GetRootTrace(nameof(GetUserAuthorizationTokenAsync), TraceComponent.Authorization, TraceLevel.Info))
+            {
+                string token = AuthorizationTokenProviderTokenCredential.GenerateAadAuthorizationSignature(
+                    await this.tokenCredentialCache.GetTokenAsync(trace));
 
-            headersCollection.Add(HttpConstants.HttpHeaders.Authorization, token);
+                headersCollection.Add(HttpConstants.HttpHeaders.Authorization, token);
+            }
         }
 
         public override void TraceUnauthorized(

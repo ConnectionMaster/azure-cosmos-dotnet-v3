@@ -28,15 +28,22 @@ namespace Microsoft.Azure.Cosmos.Fluent
         {
         }
 
-        internal ContainerBuilder(
-            Database cosmosContainers,
-            CosmosClientContext clientContext,
+        /// <summary>
+        /// Creates an instance of ContainerBuilder .
+        /// </summary>
+        /// <param name="database"> The Microsoft.Azure.Cosmos.Database object.</param>
+        /// <param name="name"> Azure Cosmos container name to create. </param>
+        /// <param name="partitionKeyPath"> The path to the partition key. Example: /partitionKey </param>
+        public ContainerBuilder(
+            Database database,
             string name,
-            string partitionKeyPath = null)
-            : base(name, partitionKeyPath)
+            string partitionKeyPath)
+            : base(
+                 string.IsNullOrEmpty(name) ? throw new ArgumentNullException(nameof(name)) : name,
+                 string.IsNullOrEmpty(partitionKeyPath) ? throw new ArgumentNullException(nameof(partitionKeyPath)) : partitionKeyPath)
         {
-            this.database = cosmosContainers;
-            this.clientContext = clientContext;
+            this.database = database ?? throw new ArgumentNullException(nameof(database));
+            this.clientContext = database.Client.ClientContext;
             this.containerUri = UriFactory.CreateDocumentCollectionUri(this.database.Id, name);
         }
 
@@ -67,7 +74,12 @@ namespace Microsoft.Azure.Cosmos.Fluent
         /// </summary>
         /// <param name="retention"> Indicates for how long operation logs have to be retained. <see cref="ChangeFeedPolicy.FullFidelityRetention"/>.</param>
         /// <returns>An instance of <see cref="ChangeFeedPolicyDefinition"/>.</returns>
-        internal ChangeFeedPolicyDefinition WithChangeFeedPolicy(TimeSpan retention)
+#if PREVIEW
+        public
+#else
+        internal
+#endif
+        ChangeFeedPolicyDefinition WithChangeFeedPolicy(TimeSpan retention)
         {
             return new ChangeFeedPolicyDefinition(
                 this,

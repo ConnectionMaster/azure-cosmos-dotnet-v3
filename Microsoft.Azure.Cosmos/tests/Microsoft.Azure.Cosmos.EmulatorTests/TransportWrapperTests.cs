@@ -177,7 +177,7 @@ namespace Microsoft.Azure.Cosmos.SDK.EmulatorTests
                     message: "Exception",
                     innerException: transportException,
                     statusCode: System.Net.HttpStatusCode.Gone);
-                CosmosClientSideRequestStatistics requestStatistics = (CosmosClientSideRequestStatistics)request.RequestContext.ClientRequestStatistics;
+                IClientSideRequestStatistics requestStatistics = request.RequestContext.ClientRequestStatistics;
                 requestStatistics.RecordResponse(request, new StoreResult(
                     storeResponse: null,
                     exception: documentClientException,
@@ -194,7 +194,9 @@ namespace Microsoft.Azure.Cosmos.SDK.EmulatorTests
                     itemLSN: 5,
                     sessionToken: null,
                     usingLocalLSN: true,
-                    activityId: Guid.NewGuid().ToString()));
+                    activityId: Guid.NewGuid().ToString(),
+                    backendRequestDurationInMs: "0",
+                    transportRequestStats: new TransportRequestStats()));
 
                 throw Documents.Rntbd.TransportExceptions.GetServiceUnavailableException(physicalAddress, Guid.NewGuid(),
                     transportException);
